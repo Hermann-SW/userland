@@ -233,6 +233,8 @@ struct RASPIVID_STATE_S
    int64_t lasttime;
 
    bool netListen;
+
+   int startframe;                      /// Start frame for I2C injection
 };
 
 
@@ -323,6 +325,7 @@ static void display_valid_parameters(char *app_name);
 #define CommandRaw          32
 #define CommandRawFormat    33
 #define CommandNetListen    34
+#define CommandStartFrame   35
 
 static COMMAND_LIST cmdline_commands[] =
 {
@@ -364,6 +367,7 @@ static COMMAND_LIST cmdline_commands[] =
    { CommandRaw,           "-raw",        "r",  "Output filename <filename> for raw video", 1 },
    { CommandRawFormat,     "-raw-format", "rf", "Specify output format for raw video. Default is yuv", 1},
    { CommandNetListen,     "-listen",     "l", "Listen on a TCP socket", 0},
+   { CommandStartFrame,    "-startframe", "stf","Specify start frame for I2C injection", 1},
 };
 
 static int cmdline_commands_size = sizeof(cmdline_commands) / sizeof(cmdline_commands[0]);
@@ -384,6 +388,21 @@ static struct
 
 static int wait_method_description_size = sizeof(wait_method_description) / sizeof(wait_method_description[0]);
 
+
+/**
+ * for raspiraw high framerate stuff
+ */
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+
+#define I2C_DEVICE_NAME_LEN 13  // "/dev/i2c-XXX"+NULL
+#define I2C_SLAVE_FORCE 0x0706
+
+#define WRITE_I2C(fd, arr)  (write(fd, arr, sizeof(arr)) != sizeof(arr))
+
+int  i2c_fd = 0;
+char i2c_device_name[I2C_DEVICE_NAME_LEN];
 
 
 /**
@@ -440,6 +459,8 @@ static void default_status(RASPIVID_STATE *state)
    state->save_pts = 0;
 
    state->netListen = false;
+
+   state->startframe = 0;
 
 
    // Setup preview window defaults
@@ -660,6 +681,17 @@ static int parse_cmdline(int argc, const char **argv, RASPIVID_STATE *state)
          if (sscanf(argv[i + 1], "%u", &state->framerate) == 1)
          {
             // TODO : What limits do we need for fps 1 - 30 - 120??
+            i++;
+         }
+         else
+            valid = 0;
+         break;
+      }
+      
+      case CommandStartFrame: // Start frame for high framerate I2C injection
+      {
+         if (sscanf(argv[i + 1], "%u", &state->startframe) == 1)
+         {
             i++;
          }
          else
@@ -1454,6 +1486,32 @@ static void encoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
                     pData->pstate->lasttime=buffer->pts;
                     pts = buffer->pts - pData->pstate->starttime;
                     fprintf(pData->pts_file_handle,"%lld.%03lld\n", pts/1000, pts%1000);
+
+                    /**
+                     * raspiraw high framerate stuff here
+                     *
+                     * raspivid 640x480 up to 180fps(!) w/o frameskips
+                     *
+                     * for now
+                     * - only for v2 camera
+                     * - only fps option
+                     * - no need to do anything up to 120fps, works already
+                     * - startframe needs to be set
+                     */
+                    if (i2c_fd && (pData->pstate->startframe == pData->pstate->frame))
+                    {
+                      // v1: ((unsigned[]){32503,29584,32503,183789,23216,23216,31749,21165})[state.sensor_mode];
+                      unsigned line_time_ns = (pData->pstate->sensor_mode < 6) ? 18904 : 19517; // v2
+                      unsigned val = 1000000000 / (line_time_ns * pData->pstate->framerate);
+                      unsigned char msg[] = {0x01, 0x60, val>>8, val&0xFF};
+                      if ( WRITE_I2C(i2c_fd, msg) )
+                      {
+                        vcos_log_error("Failed to write register FRM_LENGTH_A\n");
+                        pData->abort = 1;
+                      }
+                      if (pData->pstate->verbose)  fprintf(stderr,"raspiraw fps done.\n");
+                    }
+
                     pData->pstate->frame++;
                   }
                }
@@ -2545,6 +2603,26 @@ int main(int argc, const char **argv)
 
    check_camera_model(state.cameraNum);
 
+   /**
+    * for raspiraw high framerate stuff
+    */
+   if ((state.framerate > 120) && state.startframe && state.save_pts)
+   {
+      snprintf(i2c_device_name, sizeof(i2c_device_name), "/dev/i2c-%d", state.cameraNum);
+  
+      i2c_fd = open(i2c_device_name, O_RDWR);
+      if (!i2c_fd)
+      {
+         vcos_log_error("Couldn't open I2C device");
+         goto error;
+      }
+      if (ioctl(i2c_fd, I2C_SLAVE_FORCE, 0x10/*imx219*/) < 0)
+      {
+         vcos_log_error("Failed to set I2C address");
+         goto error;
+      }
+   }
+
    // OK, we have a nice set of parameters. Now set up our components
    // We have three components. Camera, Preview and encoder.
 
@@ -2989,6 +3067,9 @@ error:
 
       if (state.verbose)
          fprintf(stderr, "Closing down\n");
+
+      if (i2c_fd)
+         close(i2c_fd);
 
       // Disable all our ports that are not handled by connections
       check_disable_port(camera_still_port);

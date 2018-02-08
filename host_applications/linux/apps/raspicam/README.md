@@ -360,7 +360,8 @@ This options cycles through range of camera options, no capture is done, the dem
 
 	--framerate, 	-fps  	Specify the frames per second to record
 
-At present, the minimum frame rate allowed is 2fps, the maximum is 30fps. This is likely to change in the future.
+At present, the minimum frame rate allowed is 2fps. The framerate you request currently gets cropped at 90fps for v1 camera and 120fps for v2 camera by GPU firmware. This fork will expand this to at least 180fps for 640x480 on v2 camera by userland code.
+
 
 	--penc,		-e	Display preview image *after* encoding
 
