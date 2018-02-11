@@ -235,6 +235,7 @@ struct RASPIVID_STATE_S
    bool netListen;
 
    int startframe;                      /// Start frame for I2C injection
+   int vinc;                            /// vertcal increments
 };
 
 
@@ -326,6 +327,7 @@ static void display_valid_parameters(char *app_name);
 #define CommandRawFormat    33
 #define CommandNetListen    34
 #define CommandStartFrame   35
+#define CommandVinc         36
 
 static COMMAND_LIST cmdline_commands[] =
 {
@@ -368,6 +370,7 @@ static COMMAND_LIST cmdline_commands[] =
    { CommandRawFormat,     "-raw-format", "rf", "Specify output format for raw video. Default is yuv", 1},
    { CommandNetListen,     "-listen",     "l", "Listen on a TCP socket", 0},
    { CommandStartFrame,    "-startframe", "stf","Specify start frame for I2C injection", 1},
+   { CommandVinc,          "-vinc",       "vi", "Set vertical odd/even inc reg", 1},
 };
 
 static int cmdline_commands_size = sizeof(cmdline_commands) / sizeof(cmdline_commands[0]);
@@ -402,6 +405,7 @@ static int wait_method_description_size = sizeof(wait_method_description) / size
 #define WRITE_I2C(fd, arr)  (write(fd, arr, sizeof(arr)) != sizeof(arr))
 
 int  i2c_fd = 0;
+int  i2c_id = 0x36; // 0x36 ov5647, 0x10 imx219
 char i2c_device_name[I2C_DEVICE_NAME_LEN];
 
 
@@ -460,7 +464,8 @@ static void default_status(RASPIVID_STATE *state)
 
    state->netListen = false;
 
-   state->startframe = 0;
+   state->startframe = -1;
+   state->vinc = 0;
 
 
    // Setup preview window defaults
@@ -691,6 +696,17 @@ static int parse_cmdline(int argc, const char **argv, RASPIVID_STATE *state)
       case CommandStartFrame: // Start frame for high framerate I2C injection
       {
          if (sscanf(argv[i + 1], "%u", &state->startframe) == 1)
+         {
+            i++;
+         }
+         else
+            valid = 0;
+         break;
+      }
+      
+      case CommandVinc: // vertical increments
+      {
+         if (sscanf(argv[i + 1], "%u", &state->vinc) == 1)
          {
             i++;
          }
@@ -1500,16 +1516,40 @@ static void encoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
                      */
                     if (i2c_fd && (pData->pstate->startframe == pData->pstate->frame))
                     {
-                      // v1: ((unsigned[]){32503,29584,32503,183789,23216,23216,31749,21165})[state.sensor_mode];
-                      unsigned line_time_ns = (pData->pstate->sensor_mode < 6) ? 18904 : 19517; // v2
+                     if (pData->pstate->framerate > 90)
+                     {
+                      // v1: 
+                      unsigned line_time_ns = ((unsigned[]){32503,29584,32503,183789,23216,23216,31749,21165})[pData->pstate->sensor_mode];
+                      // v2: unsigned line_time_ns = (pData->pstate->sensor_mode < 6) ? 18904 : 19517;
+
                       unsigned val = 1000000000 / (line_time_ns * pData->pstate->framerate);
-                      unsigned char msg[] = {0x01, 0x60, val>>8, val&0xFF};
-                      if ( WRITE_I2C(i2c_fd, msg) )
+                      // v1:
+                      unsigned char msg1[] = {0x38, 0x0E, val>>8, val&0xFF};
+                      // v2: unsigned char msg1[] = {0x01, 0x60, val>>8, val&0xFF};
+
+                      if ( WRITE_I2C(i2c_fd, msg1) )
                       {
                         vcos_log_error("Failed to write register FRM_LENGTH_A\n");
                         pData->abort = 1;
                       }
-                      if (pData->pstate->verbose)  fprintf(stderr,"raspiraw fps done.\n");
+                     }
+
+                     if (pData->pstate->vinc)
+                     {
+                      unsigned val2 = pData->pstate->vinc;
+                      // vinc is temporarily used for height
+                      // v1: 
+                      unsigned char msg2[] = {0x38, 0x0A, val2>>8, val2&0xFF};
+
+                      if ( WRITE_I2C(i2c_fd, msg2) )
+                      {
+                        vcos_log_error("Failed to write register VINC(height)\n");
+                        pData->abort = 1;
+                      }
+                     }
+
+                     //if (pData->pstate->verbose)  
+fprintf(stderr,"I2C injection done.\n");
                     }
 
                     pData->pstate->frame++;
@@ -2606,7 +2646,7 @@ int main(int argc, const char **argv)
    /**
     * for raspiraw high framerate stuff
     */
-   if ((state.framerate > 120) && state.startframe && state.save_pts)
+   if (state.startframe != -1)
    {
       snprintf(i2c_device_name, sizeof(i2c_device_name), "/dev/i2c-%d", state.cameraNum);
   
@@ -2616,7 +2656,7 @@ int main(int argc, const char **argv)
          vcos_log_error("Couldn't open I2C device");
          goto error;
       }
-      if (ioctl(i2c_fd, I2C_SLAVE_FORCE, 0x10/*imx219*/) < 0)
+      if (ioctl(i2c_fd, I2C_SLAVE_FORCE, i2c_id) < 0)
       {
          vcos_log_error("Failed to set I2C address");
          goto error;
