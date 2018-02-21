@@ -236,6 +236,8 @@ struct RASPIVID_STATE_S
 
    int startframe;                      /// Start frame for I2C injection
    int vinc;                            /// vertcal increments
+   int top;                             /// top line in camera coordinate system
+   int ispy;                            /// TIMING_ISP_Y_WIN
 };
 
 
@@ -328,6 +330,8 @@ static void display_valid_parameters(char *app_name);
 #define CommandNetListen    34
 #define CommandStartFrame   35
 #define CommandVinc         36
+#define CommandTop          37
+#define CommandIspY         38
 
 static COMMAND_LIST cmdline_commands[] =
 {
@@ -371,6 +375,8 @@ static COMMAND_LIST cmdline_commands[] =
    { CommandNetListen,     "-listen",     "l", "Listen on a TCP socket", 0},
    { CommandStartFrame,    "-startframe", "stf","Specify start frame for I2C injection", 1},
    { CommandVinc,          "-vinc",       "vi", "Set vertical odd/even inc reg", 1},
+   { CommandTop,           "-top",        "top","Set top line in camera coordinate system", 1},
+   { CommandIspY,          "-ispy",       "iy", "TIMING_ISP_Y_WIN", 1},
 };
 
 static int cmdline_commands_size = sizeof(cmdline_commands) / sizeof(cmdline_commands[0]);
@@ -404,8 +410,8 @@ static int wait_method_description_size = sizeof(wait_method_description) / size
 
 #define WRITE_I2C(fd, arr)  (write(fd, arr, sizeof(arr)) != sizeof(arr))
 
+int  camera_is_v1 = 1; // default
 int  i2c_fd = 0;
-int  i2c_id = 0x36; // 0x36 ov5647, 0x10 imx219
 char i2c_device_name[I2C_DEVICE_NAME_LEN];
 
 
@@ -466,6 +472,8 @@ static void default_status(RASPIVID_STATE *state)
 
    state->startframe = -1;
    state->vinc = 0;
+   state->top = -1;
+   state->ispy = -1;
 
 
    // Setup preview window defaults
@@ -496,6 +504,8 @@ static void check_camera_model(int cam_num)
          status = mmal_port_parameter_get(camera_info->control, &param.hdr);
          if (status == MMAL_SUCCESS && param.num_cameras > cam_num)
          {
+            camera_is_v1 = strncmp(param.cameras[cam_num].camera_name, "ov5647", 6) ? 0 : 1;
+
             if (!strncmp(param.cameras[cam_num].camera_name, "toshh2c", 7))
             {
                fprintf(stderr, "The driver for the TC358743 HDMI to CSI2 chip you are using is NOT supported.\n");
@@ -715,6 +725,28 @@ static int parse_cmdline(int argc, const char **argv, RASPIVID_STATE *state)
          break;
       }
       
+      case CommandTop: // top line
+      {
+         if (sscanf(argv[i + 1], "%u", &state->top) == 1)
+         {
+            i++;
+         }
+         else
+            valid = 0;
+         break;
+      }
+
+      case CommandIspY: //  TIMING_ISP_Y_WIN
+      {
+         if (sscanf(argv[i + 1], "%u", &state->ispy) == 1)
+         {
+            i++;
+         }
+         else
+            valid = 0;
+         break;
+      }
+
       case CommandPreviewEnc:
          state->immutableInput = 0;
          break;
@@ -1509,47 +1541,79 @@ static void encoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
                      * raspivid 640x480 up to 180fps(!) w/o frameskips
                      *
                      * for now
-                     * - only for v2 camera
-                     * - only fps option
-                     * - no need to do anything up to 120fps, works already
+                     * - options besides fps option only for v1 camera
                      * - startframe needs to be set
+                     * - GPU permanent restriction for <= 200fps
                      */
                     if (i2c_fd && (pData->pstate->startframe == pData->pstate->frame))
                     {
-                     if (pData->pstate->framerate > 90)
-                     {
-                      // v1: 
-                      unsigned line_time_ns = ((unsigned[]){32503,29584,32503,183789,23216,23216,31749,21165})[pData->pstate->sensor_mode];
-                      // v2: unsigned line_time_ns = (pData->pstate->sensor_mode < 6) ? 18904 : 19517;
+                       if (pData->pstate->verbose) fprintf(stderr,"v%u camera\n", 2 - camera_is_v1);
 
-                      unsigned val = 1000000000 / (line_time_ns * pData->pstate->framerate);
-                      // v1:
-                      unsigned char msg1[] = {0x38, 0x0E, val>>8, val&0xFF};
-                      // v2: unsigned char msg1[] = {0x01, 0x60, val>>8, val&0xFF};
+                       // v2 camera needed for users that did not do rpi-update to get 6by9's 200fps change
+                       if (pData->pstate->framerate > 90)
+                       {
+                          unsigned smd = (pData->pstate->sensor_mode > 7) ? 0 : pData->pstate->sensor_mode;
+                          unsigned line_time_ns = ((unsigned[]){32503,29584,32503,183789,23216,23216,31749,21165})[smd];
+                          if (! camera_is_v1)
+                          {
+                             line_time_ns = (pData->pstate->sensor_mode < 6) ? 18904 : 19517;
+                          }
 
-                      if ( WRITE_I2C(i2c_fd, msg1) )
-                      {
-                        vcos_log_error("Failed to write register FRM_LENGTH_A\n");
-                        pData->abort = 1;
-                      }
-                     }
+                          unsigned val = 1000000000 / (line_time_ns * pData->pstate->framerate);
+                          unsigned char msg1[2][4] = {{0x01, 0x60, val>>8, val&0xFF}, {0x38, 0x0E, val>>8, val&0xFF}};
 
-                     if (pData->pstate->vinc)
-                     {
-                      unsigned val2 = pData->pstate->vinc;
-                      // vinc is temporarily used for height
-                      // v1: 
-                      unsigned char msg2[] = {0x38, 0x0A, val2>>8, val2&0xFF};
+                          if ( WRITE_I2C(i2c_fd, msg1[camera_is_v1]) )
+                          {
+                             vcos_log_error("Failed to write register FRM_LENGTH_A\n");
+                             pData->abort = 1;
+                          }
+                          if (pData->pstate->verbose) fprintf(stderr,"FRM_LENGTH_A written\n");
+                       }
 
-                      if ( WRITE_I2C(i2c_fd, msg2) )
-                      {
-                        vcos_log_error("Failed to write register VINC(height)\n");
-                        pData->abort = 1;
-                      }
-                     }
+                       if (pData->pstate->vinc)
+                       {
+                          unsigned val2 = pData->pstate->vinc;
+                          // vinc is temporarily used for height
+                          // TODO: v2
+                          unsigned char msg2[] = {0x38, 0x0A, val2>>8, val2&0xFF};
 
-                     //if (pData->pstate->verbose)  
-fprintf(stderr,"I2C injection done.\n");
+                          if ( WRITE_I2C(i2c_fd, msg2) )
+                          {
+                             vcos_log_error("Failed to write register VINC(height)\n");
+                             pData->abort = 1;
+                          }
+                          if (pData->pstate->verbose) fprintf(stderr,"VINC(height) written\n");
+                       }
+
+                       if (pData->pstate->top > -1)
+                       {
+                          unsigned val3 = pData->pstate->top;
+                          // TODO: v2
+                          unsigned char msg3[] = {0x38, 0x02, val3>>8, val3&0xFF};
+
+                          if ( WRITE_I2C(i2c_fd, msg3) )
+                          {
+                             vcos_log_error("Failed to write register TIMING_Y_ADDR_START\n");
+                             pData->abort = 1;
+                          }
+                          if (pData->pstate->verbose) fprintf(stderr,"TIMING_Y_ADDR_START written\n");
+                       }
+
+                       if (pData->pstate->ispy > -1)
+                       {
+                          unsigned val4 = pData->pstate->ispy;
+                          // TODO: v2
+                          unsigned char msg4[] = {0x38, 0x12, val4>>8, val4&0xFF};
+
+                          if ( WRITE_I2C(i2c_fd, msg4) )
+                          {
+                             vcos_log_error("Failed to write register TIMING_ISP_Y_WIN\n");
+                             pData->abort = 1;
+                          }
+                          if (pData->pstate->verbose) fprintf(stderr,"TIMING_ISP_Y_WIN written\n");
+                       }
+
+                       if (pData->pstate->verbose) fprintf(stderr,"I2C injection done.\n");
                     }
 
                     pData->pstate->frame++;
@@ -2649,14 +2713,14 @@ int main(int argc, const char **argv)
    if (state.startframe != -1)
    {
       snprintf(i2c_device_name, sizeof(i2c_device_name), "/dev/i2c-%d", state.cameraNum);
-  
+
       i2c_fd = open(i2c_device_name, O_RDWR);
       if (!i2c_fd)
       {
          vcos_log_error("Couldn't open I2C device");
          goto error;
       }
-      if (ioctl(i2c_fd, I2C_SLAVE_FORCE, i2c_id) < 0)
+      if (ioctl(i2c_fd, I2C_SLAVE_FORCE, camera_is_v1 ? 0x36 : 0x10) < 0)
       {
          vcos_log_error("Failed to set I2C address");
          goto error;
