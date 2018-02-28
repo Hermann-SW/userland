@@ -237,7 +237,9 @@ struct RASPIVID_STATE_S
    int startframe;                      /// Start frame for I2C injection
    int vinc;                            /// vertcal increments
    int top;                             /// top line in camera coordinate system
+   int lft;                             /// left column in camera coordinate system
    int ispy;                            /// TIMING_ISP_Y_WIN
+   int awb;                             /// ISPCTRL01
 };
 
 
@@ -331,7 +333,9 @@ static void display_valid_parameters(char *app_name);
 #define CommandStartFrame   35
 #define CommandVinc         36
 #define CommandTop          37
-#define CommandIspY         38
+#define CommandLft          38
+#define CommandIspY         39
+#define CommandAwb          40
 
 static COMMAND_LIST cmdline_commands[] =
 {
@@ -376,7 +380,9 @@ static COMMAND_LIST cmdline_commands[] =
    { CommandStartFrame,    "-startframe", "stf","Specify start frame for I2C injection", 1},
    { CommandVinc,          "-vinc",       "vi", "Set vertical odd/even inc reg", 1},
    { CommandTop,           "-top",        "top","Set top line in camera coordinate system", 1},
+   { CommandLft,           "-left",       "lft","Set left column in camera coordinate system", 1},
    { CommandIspY,          "-ispy",       "iy", "TIMING_ISP_Y_WIN", 1},
+   { CommandAwb,           "-awb",        "awb", "ISPCTRL01", 1},
 };
 
 static int cmdline_commands_size = sizeof(cmdline_commands) / sizeof(cmdline_commands[0]);
@@ -473,7 +479,9 @@ static void default_status(RASPIVID_STATE *state)
    state->startframe = -1;
    state->vinc = 0;
    state->top = -1;
+   state->lft = -1;
    state->ispy = -1;
+   state->awb = -1;
 
 
    // Setup preview window defaults
@@ -736,9 +744,31 @@ static int parse_cmdline(int argc, const char **argv, RASPIVID_STATE *state)
          break;
       }
 
+      case CommandLft: // left column
+      {
+         if (sscanf(argv[i + 1], "%u", &state->lft) == 1)
+         {
+            i++;
+         }
+         else
+            valid = 0;
+         break;
+      }
+
       case CommandIspY: //  TIMING_ISP_Y_WIN
       {
          if (sscanf(argv[i + 1], "%u", &state->ispy) == 1)
+         {
+            i++;
+         }
+         else
+            valid = 0;
+         break;
+      }
+
+      case CommandAwb: //  ISPCTRL01
+      {
+         if (sscanf(argv[i + 1], "%u", &state->awb) == 1)
          {
             i++;
          }
@@ -1599,6 +1629,20 @@ static void encoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
                           if (pData->pstate->verbose) fprintf(stderr,"TIMING_Y_ADDR_START written\n");
                        }
 
+                       if (pData->pstate->lft > -1)
+                       {
+                          unsigned val3 = pData->pstate->lft;
+                          // TODO: v2
+                          unsigned char msg3[] = {0x38, 0x00, val3>>8, val3&0xFF};
+
+                          if ( WRITE_I2C(i2c_fd, msg3) )
+                          {
+                             vcos_log_error("Failed to write register TIMING_X_ADDR_START\n");
+                             pData->abort = 1;
+                          }
+                          if (pData->pstate->verbose) fprintf(stderr,"TIMING_X_ADDR_START written\n");
+                       }
+
                        if (pData->pstate->ispy > -1)
                        {
                           unsigned val4 = pData->pstate->ispy;
@@ -1611,6 +1655,20 @@ static void encoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
                              pData->abort = 1;
                           }
                           if (pData->pstate->verbose) fprintf(stderr,"TIMING_ISP_Y_WIN written\n");
+                       }
+
+                       if (pData->pstate->awb > -1)
+                       {
+                          unsigned val3 = pData->pstate->awb;
+                          // TODO: v2
+                          unsigned char msg3[] = {0x50, 0x01, val3>>8, val3&0xFF};
+
+                          if ( WRITE_I2C(i2c_fd, msg3) )
+                          {
+                             vcos_log_error("Failed to write register ISPCTRL01\n");
+                             pData->abort = 1;
+                          }
+                          if (pData->pstate->verbose) fprintf(stderr,"ISPCTRL01 written\n");
                        }
 
                        if (pData->pstate->verbose) fprintf(stderr,"I2C injection done.\n");
