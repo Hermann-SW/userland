@@ -1,0 +1,18 @@
+#!/bin/bash
+
+# 640x480 at 180fps for v2 camera
+
+if [ "$1" = "" ]; then echo "format: `basename $0` ms"; exit; fi
+
+fps=180
+echo "capturing frames for ${1}ms with ${fps}fps requested"
+
+stf=1
+if [ "$stf" = "1" ]; then
+  build/bin/raspivid -md 7 -stf 25 -fps $fps -pts tstamps.pts -w 640 -h 480 -o out.h264 -t $1 -ex off
+  tools/ptsanalyze tstamps.pts 25
+else
+  # standard raspivid after rpi-update
+  raspivid -md 7 -fps $fps -pts tstamps.pts -w 640 -h 480 -o out.h264 -t $1 -ex off
+  tools/ptsanalyze tstamps.pts 1
+fi

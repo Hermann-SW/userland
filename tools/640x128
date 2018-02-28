@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# 640x128 at 150fps for v1 camera
+
+if [ "$1" = "" ]; then echo "format: `basename $0` ms"; exit; fi
+
+fps=150
+echo "capturing frames for ${1}ms with ${fps}fps requested"
+build/bin/raspivid -md 7 -stf 25 -fps $fps -vi 304 -top 17 -pts tstamps.pts -w 640 -h 128 -o out.h264 -t $1 -ex off
+
+tools/ptsanalyze tstamps.pts 25
