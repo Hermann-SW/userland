@@ -175,6 +175,7 @@ static const int stereo_mode_map_size = sizeof(stereo_mode_map)/sizeof(stereo_mo
 #define CommandFlicker     25
 #define CommandAnalogGain  26
 #define CommandDigitalGain 27
+#define CommandShutterSpeed2 28
 
 static COMMAND_LIST  cmdline_commands[] =
 {
@@ -196,6 +197,7 @@ static COMMAND_LIST  cmdline_commands[] =
    {CommandVFlip,       "-vflip",     "vf", "Set vertical flip", 0},
    {CommandROI,         "-roi",       "roi","Set region of interest (x,y,w,d as normalised coordinates [0.0-1.0])", 1},
    {CommandShutterSpeed,"-shutter",   "ss", "Set shutter speed in microseconds", 1},
+   {CommandShutterSpeed2,"-shutter2", "ss2","Set two shutter speeds in microseconds, and modulus", 1},
    {CommandAwbGains,    "-awbgains",  "awbg", "Set AWB gains - AWB mode must be off", 1},
    {CommandDRCLevel,    "-drc",       "drc", "Set DRC Level (see Notes)", 1},
    {CommandStatsPass,   "-stats",     "st", "Force recomputation of statistics on stills capture pass"},
@@ -692,6 +694,24 @@ int raspicamcontrol_parse_cmdline(RASPICAM_CAMERA_PARAMETERS *params, const char
       break;
    }
 
+   case CommandShutterSpeed2 :
+   {
+      int args, ssm, ss1, ss2;
+
+      args = sscanf(arg2, "%d,%d,%d", &ssm,&ss1,&ss2);
+
+      if (args != 3)
+      {
+         return 0;
+      }
+
+      params->shutter_speed_m = ssm;
+      params->shutter_speed_1 = ss1;
+      params->shutter_speed_2 = ss2;
+      used = 2;
+      break;
+   }
+
    case CommandAwbGains :
       {
       double r,b;
@@ -985,6 +1005,9 @@ void raspicamcontrol_set_defaults(RASPICAM_CAMERA_PARAMETERS *params)
    params->roi.x = params->roi.y = 0.0;
    params->roi.w = params->roi.h = 1.0;
    params->shutter_speed = 0;          // 0 = auto
+   params->shutter_speed_m = -1;       // no --shutter2 
+   params->shutter_speed_1 = 0;
+   params->shutter_speed_2 = 0;
    params->awb_gains_r = 0;      // Only have any function if AWB OFF is used.
    params->awb_gains_b = 0;
    params->drc_level = MMAL_PARAMETER_DRC_STRENGTH_OFF;

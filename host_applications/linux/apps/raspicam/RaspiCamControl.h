@@ -154,6 +154,9 @@ typedef struct raspicam_camera_parameters_s
    int vflip;                 /// 0 or 1
    PARAM_FLOAT_RECT_T  roi;   /// region of interest to use on the sensor. Normalised [0,1] values in the rect
    int shutter_speed;         /// 0 = auto, otherwise the shutter speed in ms
+   int shutter_speed_m;       /// frame number modulus for shutter chahges
+   int shutter_speed_1;       /// first shutter speed
+   int shutter_speed_2;       /// second shutter speed
    float awb_gains_r;         /// AWB red gain
    float awb_gains_b;         /// AWB blue gain
    MMAL_PARAMETER_DRC_STRENGTH_T drc_level;  // Strength of Dynamic Range compression to apply

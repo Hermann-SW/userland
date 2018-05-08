@@ -1566,6 +1566,23 @@ static void encoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
                     fprintf(pData->pts_file_handle,"%lld.%03lld\n", pts/1000, pts%1000);
 
                     /**
+                     * raspiraw --shutter2 implementation 
+                     */
+                    if ((pData->pstate->camera_parameters.shutter_speed_m != -1) &&
+                        (pData->pstate->frame % pData->pstate->camera_parameters.shutter_speed_m == 0)
+                       )
+                    {
+                       if (pData->pstate->frame % (2*pData->pstate->camera_parameters.shutter_speed_m) == 0)
+                       {
+                          raspicamcontrol_set_shutter_speed(pData->pstate->camera_component, pData->pstate->camera_parameters.shutter_speed_2);
+                       }
+                       else
+                       {
+                          raspicamcontrol_set_shutter_speed(pData->pstate->camera_component, pData->pstate->camera_parameters.shutter_speed_1);
+                       }
+                    }
+
+                    /**
                      * raspiraw high framerate stuff here
                      *
                      * raspivid 640x480 up to 180fps(!) w/o frameskips
