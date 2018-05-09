@@ -236,6 +236,7 @@ struct RASPIVID_STATE_S
 
    int startframe;                      /// Start frame for I2C injection
    int vinc;                            /// vertcal increments
+   int voinc;                           /// vertcal odd line increment (v2)
    int top;                             /// top line in camera coordinate system
    int lft;                             /// left column in camera coordinate system
    int ispy;                            /// TIMING_ISP_Y_WIN
@@ -336,6 +337,7 @@ static void display_valid_parameters(char *app_name);
 #define CommandLft          38
 #define CommandIspY         39
 #define CommandAwb          40
+#define CommandVoinc        41
 
 static COMMAND_LIST cmdline_commands[] =
 {
@@ -379,6 +381,7 @@ static COMMAND_LIST cmdline_commands[] =
    { CommandNetListen,     "-listen",     "l", "Listen on a TCP socket", 0},
    { CommandStartFrame,    "-startframe", "stf","Specify start frame for I2C injection", 1},
    { CommandVinc,          "-vinc",       "vi", "Set vertical odd/even inc reg", 1},
+   { CommandVoinc,         "-voinc",      "voi","Set vertical odd inc reg", 1},
    { CommandTop,           "-top",        "top","Set top line in camera coordinate system", 1},
    { CommandLft,           "-left",       "lft","Set left column in camera coordinate system", 1},
    { CommandIspY,          "-ispy",       "iy", "TIMING_ISP_Y_WIN", 1},
@@ -478,6 +481,7 @@ static void default_status(RASPIVID_STATE *state)
 
    state->startframe = -1;
    state->vinc = 0;
+   state->voinc = 0;
    state->top = -1;
    state->lft = -1;
    state->ispy = -1;
@@ -725,6 +729,17 @@ static int parse_cmdline(int argc, const char **argv, RASPIVID_STATE *state)
       case CommandVinc: // vertical increments
       {
          if (sscanf(argv[i + 1], "%u", &state->vinc) == 1)
+         {
+            i++;
+         }
+         else
+            valid = 0;
+         break;
+      }
+      
+      case CommandVoinc: // vertical odd increments
+      {
+         if (sscanf(argv[i + 1], "%u", &state->voinc) == 1)
          {
             i++;
          }
@@ -1630,6 +1645,18 @@ static void encoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
                              pData->abort = 1;
                           }
                           if (pData->pstate->verbose) fprintf(stderr,"VINC(height) written\n");
+                       }
+
+                       if (pData->pstate->voinc && !camera_is_v1)
+                       {
+                          unsigned char msg2[] = {0x01, 0x71, pData->pstate->voinc};
+
+                          if ( WRITE_I2C(i2c_fd, msg2) )
+                          {
+                             vcos_log_error("Failed to write register VOINC\n");
+                             pData->abort = 1;
+                          }
+                          if (pData->pstate->verbose) fprintf(stderr,"VOINC written\n");
                        }
 
                        if (pData->pstate->top > -1)
