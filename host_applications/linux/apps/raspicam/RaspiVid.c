@@ -240,6 +240,7 @@ struct RASPIVID_STATE_S
    int hoinc;                           /// horizontal odd column increment (v2)
    int top;                             /// top line in camera coordinate system
    int lft;                             /// left column in camera coordinate system
+   int lft3D;                           /// left displacement from center
    int ispy;                            /// TIMING_ISP_Y_WIN
    int awb;                             /// ISPCTRL01
 };
@@ -340,6 +341,7 @@ static void display_valid_parameters(char *app_name);
 #define CommandAwb          40
 #define CommandVoinc        41
 #define CommandHoinc        42
+#define CommandLft3D        43
 
 static COMMAND_LIST cmdline_commands[] =
 {
@@ -387,6 +389,7 @@ static COMMAND_LIST cmdline_commands[] =
    { CommandHoinc,         "-hoinc",      "hoi","Set horizontal odd inc reg", 1},
    { CommandTop,           "-top",        "top","Set top line in camera coordinate system", 1},
    { CommandLft,           "-left",       "lft","Set left column in camera coordinate system", 1},
+   { CommandLft3D,         "-left3D",     "l3D","Set left displacement from center", 1},
    { CommandIspY,          "-ispy",       "iy", "TIMING_ISP_Y_WIN", 1},
    { CommandAwb,           "-awb",        "awb", "ISPCTRL01", 1},
 };
@@ -488,6 +491,7 @@ static void default_status(RASPIVID_STATE *state)
    state->hoinc = 0;
    state->top = -1;
    state->lft = -1;
+   state->lft3D = -1;
    state->ispy = -1;
    state->awb = -1;
 
@@ -777,6 +781,17 @@ static int parse_cmdline(int argc, const char **argv, RASPIVID_STATE *state)
       case CommandLft: // left column
       {
          if (sscanf(argv[i + 1], "%u", &state->lft) == 1)
+         {
+            i++;
+         }
+         else
+            valid = 0;
+         break;
+      }
+
+      case CommandLft3D: // left displacement from center
+      {
+         if (sscanf(argv[i + 1], "%u", &state->lft3D) == 1)
          {
             i++;
          }
@@ -1610,6 +1625,43 @@ static void encoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
                        {
                           raspicamcontrol_set_shutter_speed(pData->pstate->camera_component, pData->pstate->camera_parameters.shutter_speed_1);
                        }
+                    }
+
+                    /**
+                     * raspivid --lft3D implementation 
+                     */
+                    if (pData->pstate->lft3D > -1)
+                    {
+                       // v2 only for now
+                       unsigned nwidth, lft, end;
+
+		       // calculate native fov x borders
+                       nwidth = pData->pstate->width*2;          // correct only for mode>=4
+                       lft = (3280 - nwidth)/2;
+                       if (pData->pstate->frame % 2) {
+                          lft -= pData->pstate->lft3D;  // left "eye" position
+                       } else {
+                          lft += pData->pstate->lft3D;  // right "eye" position
+                       }
+		       end = lft + nwidth - 1;
+
+                       // set x params
+                       unsigned char msg3l[] = {0x01, 0x64, lft>>8, lft&0xFF};
+                       unsigned char msg3e[] = {0x01, 0x66, end>>8, end&0xFF};
+
+                       if ( WRITE_I2C(i2c_fd, msg3l) )
+                       {
+                          vcos_log_error("Failed to write register 0x0164\n");
+                          pData->abort = 1;
+                       }
+                       if (pData->pstate->verbose) fprintf(stderr,"0x0164 written\n");
+
+                       if ( WRITE_I2C(i2c_fd, msg3e) )
+                       {
+                          vcos_log_error("Failed to write register 0x0166\n");
+                          pData->abort = 1;
+                       }
+                       if (pData->pstate->verbose) fprintf(stderr,"0x0166 written\n");
                     }
 
                     /**
