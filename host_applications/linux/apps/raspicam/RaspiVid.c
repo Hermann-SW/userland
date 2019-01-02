@@ -1702,6 +1702,8 @@ static void encoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
 
                        if (pData->pstate->lft > -1)
                        {
+                        if (camera_is_v1)
+                        {
                           unsigned val3 = pData->pstate->lft;
                           // TODO: v2
                           unsigned char msg3[] = {0x38, 0x00, val3>>8, val3&0xFF};
@@ -1712,6 +1714,32 @@ static void encoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
                              pData->abort = 1;
                           }
                           if (pData->pstate->verbose) fprintf(stderr,"TIMING_X_ADDR_START written\n");
+                        } else {
+                          unsigned nwidth, lft, end;
+
+		          // calculate native fov x borders
+		          nwidth = pData->pstate->width*2;          // correct only for mode>=4
+                          lft = pData->pstate->lft;
+		          end = lft + nwidth - 1;
+
+		          // set x params
+                          unsigned char msg3l[] = {0x01, 0x64, lft>>8, lft&0xFF};
+                          unsigned char msg3e[] = {0x01, 0x66, end>>8, end&0xFF};
+
+                          if ( WRITE_I2C(i2c_fd, msg3l) )
+                          {
+                             vcos_log_error("Failed to write register 0x0164\n");
+                             pData->abort = 1;
+                          }
+                          if (pData->pstate->verbose) fprintf(stderr,"0x0164 written\n");
+
+                          if ( WRITE_I2C(i2c_fd, msg3e) )
+                          {
+                             vcos_log_error("Failed to write register 0x0166\n");
+                             pData->abort = 1;
+                          }
+                          if (pData->pstate->verbose) fprintf(stderr,"0x0166 written\n");
+                        }
                        }
 
                        if (pData->pstate->ispy > -1)
